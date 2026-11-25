@@ -1,0 +1,45 @@
+import { chromium } from '/tmp/pw/node_modules/playwright/index.mjs'
+import fs from 'fs'
+const base = 'http://localhost:4173/'
+const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--no-sandbox'] })
+const ctx = await browser.newContext({ viewport: { width: 1500, height: 950 }, acceptDownloads: true })
+const page = await ctx.newPage()
+const errors = []
+page.on('pageerror', (e) => errors.push('PAGEERROR ' + e.message))
+page.on('console', (m) => { if (m.type() === 'error') errors.push('CONSOLE ' + m.text()) })
+const ok = (c, msg) => console.log((c ? 'PASS ' : 'FAIL ') + msg)
+const setUser = async (id) => { await page.evaluate((id) => { const k='stroyai-demo-v1'; const s = JSON.parse(localStorage.getItem(k) || '{"state":{},"version":8}'); s.state.currentUserId = id; localStorage.setItem(k, JSON.stringify(s)) }, id); await page.reload(); await page.waitForTimeout(700) }
+const money = (t) => Number(t.replace(/[^\d,]/g, '').replace(',', '.'))
+
+await page.goto(base); await page.evaluate(() => localStorage.clear()); await setUser('u_pto')
+await page.goto(base + '#/pto?project=p3&tab=quality'); await page.waitForTimeout(800)
+await page.getByRole('button', { name: 'Найти недостающие' }).click(); await page.waitForTimeout(2000)
+ok((await page.locator('[data-search]').count()) === 2, 'поиск по 2 материалам с замечаниями')
+const duct = page.locator('[data-search="m_duct"]')
+ok(await duct.locator('[data-cand="archive"]').getByText('ЕАЭС N RU Д-RU.АЖ26.В.04121').isVisible(), 'воздуховоды: найден в архиве компании (другой объект)')
+ok(await duct.locator('[data-cand="registry"]').isVisible(), 'есть результат из реестра (демо)')
+await duct.locator('[data-cand="archive"]').getByRole('button', { name: 'В реестр' }).click(); await page.waitForTimeout(200)
+ok(await duct.getByText('добавлен').isVisible(), 'документ добавлен в реестр')
+await page.screenshot({ path: '/tmp/c_s1.png' })
+await page.getByRole('button', { name: 'Готово' }).click(); await page.waitForTimeout(300)
+await page.locator('[data-qd]', { hasText: 'АЖ26.В.04121' }).getByRole('button', { name: 'Принять' }).click(); await page.waitForTimeout(300)
+ok(!(await page.locator('[data-cov="m_duct"]').getByText('нет действующего').count()) && await page.locator('[data-cov="m_duct"]').innerText().then(t => t.includes('04121')), 'воздуховоды: закрыты документом из архива')
+// окна ЖК: паспорт только у поставщика
+await page.goto(base + '#/pto?project=p1&tab=quality'); await page.waitForTimeout(800)
+await page.locator('[data-cov="m_window"]').getByRole('button', { name: 'Найти' }).click(); await page.waitForTimeout(2000)
+ok(await page.getByText(/публично не размещается — запрашивается у поставщика/).isVisible(), 'паспорт: объяснение, что запрашивается у поставщика')
+await page.getByRole('button', { name: 'Подготовить письмо поставщику' }).click(); await page.waitForTimeout(300)
+await page.getByRole('button', { name: 'Открыть письмо' }).click(); await page.waitForTimeout(800)
+ok(await page.getByText('Исходящее письмо').isVisible(), 'открыто исходящее письмо в «Переписке»')
+const body = await page.getByLabel('Текст ответа').inputValue()
+ok(body.includes('Окно ПВХ двухкамерное: паспорт качества на каждую партию'), 'письмо: что и на что запрашиваем')
+await page.getByRole('button', { name: 'На согласование' }).click(); await page.waitForTimeout(300)
+await setUser('u_dir'); await page.goto(base + '#/mail'); await page.waitForTimeout(600)
+await page.getByRole('button', { name: /Исходящие \(1\)/ }).click(); await page.waitForTimeout(300)
+await page.locator('[data-letter]').first().click(); await page.waitForTimeout(400)
+await page.getByRole('button', { name: 'Согласовать' }).click(); await page.waitForTimeout(200)
+await page.getByRole('button', { name: 'Отправить' }).click(); await page.getByRole('dialog').getByRole('button', { name: 'Отправить' }).click(); await page.waitForTimeout(400)
+ok(await page.locator('[data-reply="sent"]').getByText(/исх\. № 119\/26/).isVisible(), 'запрос поставщику согласован и отправлен');
+await page.screenshot({ path: '/tmp/c_s2.png' })
+console.log('ERRORS', errors.length, errors.slice(0, 5))
+await browser.close()

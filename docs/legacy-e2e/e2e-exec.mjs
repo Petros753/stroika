@@ -1,0 +1,113 @@
+import { chromium } from '/tmp/pw/node_modules/playwright/index.mjs'
+import fs from 'fs'
+const base = 'http://localhost:4173/'
+const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--no-sandbox'] })
+const ctx = await browser.newContext({ viewport: { width: 1500, height: 950 }, acceptDownloads: true })
+const page = await ctx.newPage()
+const errors = []
+page.on('pageerror', (e) => errors.push('PAGEERROR ' + e.message))
+page.on('console', (m) => { if (m.type() === 'error') errors.push('CONSOLE ' + m.text()) })
+const ok = (c, msg) => console.log((c ? 'PASS ' : 'FAIL ') + msg)
+const setUser = async (id) => { await page.evaluate((id) => { const k='stroyai-demo-v1'; const s = JSON.parse(localStorage.getItem(k) || '{"state":{},"version":4}'); s.state.currentUserId = id; localStorage.setItem(k, JSON.stringify(s)) }, id); await page.reload(); await page.waitForTimeout(700) }
+const money = (t) => Number(t.replace(/[^\d,]/g, '').replace(',', '.'))
+
+await page.goto(base); await page.evaluate(() => localStorage.clear())
+// ---- миграция со старой версии хранилища (v3 без executionReports) ----
+await page.evaluate(() => localStorage.setItem('stroyai-demo-v1', JSON.stringify({ state: { currentUserId: 'u_dir', theme: 'light' }, version: 3 })))
+await page.goto(base + '#/execution?project=p2'); await page.reload(); await page.waitForTimeout(800)
+ok(await page.locator('[data-report="1"]').isVisible(), 'миграция v3→v4: справки появились')
+
+// ---- директор: видит, подписывает, не редактирует ----
+ok(await page.getByText('Выполнение КС-2/КС-3').first().isVisible(), 'пункт меню есть у директора')
+ok((await page.getByRole('button', { name: 'Новый КС-2' }).count()) === 0, 'директор не создаёт КС-2')
+await page.locator('[data-report="3"]').click(); await page.waitForTimeout(400)
+ok((await page.locator('input[aria-label="Выполнено за период"]').count()) === 0, 'директор не правит объёмы')
+ok(await page.getByRole('button', { name: 'Подписать' }).isVisible(), 'директор может подписать')
+await page.screenshot({ path: '/tmp/ex1.png' })
+await page.getByRole('button', { name: /КС-3/ }).click(); await page.waitForTimeout(300)
+const ks3text = await page.locator('text=к оплате с НДС').innerText()
+ok(/к оплате с НДС/.test(ks3text), 'КС-3 показывает сумму к оплате')
+await page.screenshot({ path: '/tmp/ex2.png' })
+let [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Word' }).click()])
+const ks3doc = fs.readFileSync(await dl.path(), 'utf8')
+ok(dl.suggestedFilename().includes('KS3') && ks3doc.includes('КС-3') && ks3doc.includes('ДЕМОНСТРАЦИОННЫЙ'), 'КС-3 Word скачан')
+await page.keyboard.press('Escape')
+
+// ---- прораб: создаёт, заполняет, не подписывает ----
+await setUser('u_admin')
+const pm = await page.evaluate(() => JSON.parse(localStorage.getItem('stroyai-demo-v1')).state.users.find(u => u.id === 'u_for1').projectIds)
+await setUser('u_for1')
+const proj = pm[0]
+await page.goto(base + '#/execution?project=' + proj); await page.waitForTimeout(700)
+await page.getByRole('button', { name: 'Новый КС-2' }).click(); await page.waitForTimeout(300)
+await page.getByRole('button', { name: 'Создать' }).click(); await page.waitForTimeout(500)
+ok(await page.getByText('черновик').first().isVisible(), 'прораб создал черновик КС-2')
+await page.getByRole('button', { name: '10%' }).click(); await page.waitForTimeout(300)
+const inputs = page.locator('input[aria-label="Выполнено за период"]')
+ok((await inputs.count()) > 0, 'поля объёмов доступны: ' + await inputs.count())
+// ввод сверх остатка → обрезается
+const first = inputs.first()
+await first.fill('99999999'); await first.blur(); await page.waitForTimeout(300)
+const rowRemain = await page.locator('tbody tr[data-item]').first().locator('td').nth(6).innerText()
+ok(Number(rowRemain.replace(/\s/g, '').replace(',', '.')) === 0, 'объём ограничен остатком (остаток 0): ' + rowRemain)
+ok((await page.getByRole('button', { name: 'Подписать' }).count()) === 0, 'прораб не подписывает')
+;[dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'CSV' }).click()])
+const csv = fs.readFileSync(await dl.path(), 'utf8')
+ok(csv.startsWith('﻿') && csv.includes('ВСЕГО С НДС'), 'CSV КС-2 скачан')
+await page.keyboard.press('Escape')
+
+// ---- РП подписывает ----
+await setUser('u_admin')
+await page.goto(base + '#/execution?project=' + proj); await page.waitForTimeout(700)
+const doneBefore = money(await page.locator('text=Выполнено (подписано)').locator('..').locator('div').nth(1).innerText())
+const top = page.locator('tbody tr[data-report]').first()
+await top.click(); await page.waitForTimeout(300)
+await page.getByRole('button', { name: 'Подписать' }).click(); await page.waitForTimeout(200)
+await page.getByRole('dialog').last().getByRole('button', { name: 'Подписать' }).click(); await page.waitForTimeout(400)
+ok(await page.getByText('подписан', { exact: true }).first().isVisible(), 'КС-2 подписан')
+ok((await page.locator('input[aria-label="Выполнено за период"]').count()) === 0, 'после подписи объёмы не редактируются')
+await page.keyboard.press('Escape'); await page.waitForTimeout(300)
+const doneAfter = money(await page.locator('text=Выполнено (подписано)').locator('..').locator('div').nth(1).innerText())
+ok(doneAfter > doneBefore, `выполнено выросло: ${doneBefore} → ${doneAfter}`)
+
+// ---- корректировка сметы: сметчик ----
+await setUser('u_est')
+await page.goto(base + '#/estimates?project=p2'); await page.waitForTimeout(700)
+await page.locator('tbody tr', { hasText: 'ГРАНД' }).first().click(); await page.waitForTimeout(400)
+const title0 = await page.getByRole('dialog').locator('h3').innerText()
+await page.getByRole('button', { name: 'Корректировка' }).click(); await page.waitForTimeout(300)
+const save = page.getByRole('button', { name: 'Сохранить как новую версию' })
+ok(await save.isDisabled(), 'без изменений сохранить нельзя')
+const boxes = page.locator('input[aria-label="Включить работу"]')
+await boxes.nth(0).uncheck(); await boxes.nth(1).uncheck()
+await page.locator('tr[data-item] input[type=number]').nth(0).fill('1')
+await page.waitForTimeout(200)
+const foot = await page.getByRole('dialog').locator('text=Исключено').innerText()
+ok(/Исключено: 2/.test(foot) && /изменён объём: 1/.test(foot), 'сводка корректировки: ' + foot.replace(/\s+/g, ' '))
+await page.screenshot({ path: '/tmp/ex3.png' })
+await save.click(); await page.waitForTimeout(500)
+const title1 = await page.getByRole('dialog').locator('h3').innerText()
+ok(title1 !== title0 && /v\d+/.test(title1), `новая версия открыта: ${title0} → ${title1}`)
+ok(await page.getByText(/Корректировка v\d+: исключено 2, изменено 1/).isVisible(), 'заметка о корректировке')
+ok((await page.locator('tr.line-through').count()) === 2, 'исключённые позиции зачёркнуты')
+await page.screenshot({ path: '/tmp/ex4.png' })
+await page.keyboard.press('Escape')
+
+// ---- бухгалтер: только просмотр; ассистент ----
+await setUser('u_acc')
+await page.goto(base + '#/execution'); await page.waitForTimeout(600)
+ok((await page.getByRole('button', { name: 'Новый КС-2' }).count()) === 0, 'бухгалтер не создаёт КС-2')
+await setUser('u_dir')
+await page.goto(base + '#/assistant'); await page.waitForTimeout(600)
+await page.getByRole('button', { name: 'Сколько выполнено по КС-2?' }).click(); await page.waitForTimeout(800)
+ok(await page.getByText('Выполнение по подписанным КС-2').first().isVisible(), 'ассистент отвечает про КС-2')
+// снабженец без доступа
+await setUser('u_sup')
+await page.goto(base + '#/execution'); await page.waitForTimeout(600)
+ok((await page.getByText('Нет доступа').count()) > 0 || (await page.locator('[data-report]').count()) === 0, 'снабженцу раздел закрыт')
+// тёмная тема + мобильный
+await setUser('u_dir')
+await page.setViewportSize({ width: 390, height: 800 }); await page.goto(base + '#/execution'); await page.waitForTimeout(600)
+await page.screenshot({ path: '/tmp/ex5.png' })
+console.log('ERRORS', errors.length, errors.slice(0, 5))
+await browser.close()
