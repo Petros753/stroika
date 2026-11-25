@@ -135,6 +135,7 @@
       "kb.manage",
       "cad.edit",
       "pto.create",
+      "employees.manage",
       "finance.view",
       "docs.sign",
       "execution.approve",
@@ -196,6 +197,11 @@
       "docs.sign"
     ]
   },
+  "allProjectsRoles": [
+    "admin",
+    "director",
+    "accountant"
+  ],
   "sectionPath": {
     "dashboard": "/",
     "projects": "/projects",

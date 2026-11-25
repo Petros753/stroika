@@ -1,0 +1,25 @@
+# ТОЛЬКО для локальной проверки (не для сервера):
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+# Добавляет CA-сертификат прокси для сборки и локальный Caddy на http://localhost:8088,
+# повторяющий схему сервера: Caddy → (сеть n8n_data_default) → stroyai-web:80 → api.
+services:
+  api:
+    build:
+      network: host
+      secrets: [ca]
+  web:
+    build:
+      network: host
+      secrets: [ca]
+  caddy-local:
+    image: caddy:2-alpine
+    command: ["caddy", "reverse-proxy", "--from", ":8088", "--to", "stroyai-web:80"]
+    ports: ["127.0.0.1:8088:8088"]
+    networks: [caddy]
+    depends_on:
+      web:
+        condition: service_healthy
+
+secrets:
+  ca:
+    file: ${LOCAL_CA_FILE:-/root/.ccr/ca-bundle.crt}

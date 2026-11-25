@@ -22,7 +22,7 @@ export const PERMISSIONS: Record<Role, Permission[]> = {
   ],
   director: [
     'project.create', 'project.edit', 'stage.edit', 'task.edit', 'request.approve', 'estimate.compare', 'pto.approve',
-    'kb.manage', 'cad.edit', 'pto.create', 'finance.view', 'docs.sign', 'execution.approve', 'costing.edit', 'mail.draft', 'mail.send',
+    'kb.manage', 'cad.edit', 'pto.create', 'employees.manage', 'finance.view', 'docs.sign', 'execution.approve', 'costing.edit', 'mail.draft', 'mail.send',
   ],
   pm: [
     'project.edit', 'stage.edit', 'task.edit', 'request.create', 'request.approve', 'estimate.compare', 'pto.approve',

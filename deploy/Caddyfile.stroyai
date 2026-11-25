@@ -1,0 +1,5 @@
+# Дописать в конец /opt/n8n_data/caddy/Caddyfile (сначала — бэкап файла)
+app.stroika.petr-ai.ru {
+    encode gzip
+    reverse_proxy stroyai-web:80
+}

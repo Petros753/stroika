@@ -11,3 +11,8 @@ deploy/.env
 /data/
 *.log
 .DS_Store
+dist-demo/
+test-results/
+playwright-report/
+.mypy_cache/
+.ruff_cache/

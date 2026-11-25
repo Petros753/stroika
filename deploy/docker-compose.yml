@@ -1,0 +1,75 @@
+# СтройAI — рабочая версия. Запуск: cd /opt/stroyai/deploy && docker compose up -d --build
+# Наружу порты не публикуются: web подключён к сети Caddy (n8n_data_default) с алиасом stroyai-web.
+name: stroyai
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?}
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - effective_cache_size=256MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=32MB
+      - -c
+      - max_connections=30
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    mem_limit: 320m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+
+  api:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    volumes:
+      - files:/data/files
+    depends_on:
+      db:
+        condition: service_healthy
+    mem_limit: 320m
+    networks: [internal]
+
+  web:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_ENABLED_SECTIONS: ${VITE_ENABLED_SECTIONS:-employees}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    mem_limit: 64m
+    networks:
+      internal: {}
+      caddy:
+        aliases: [stroyai-web]
+
+volumes:
+  db-data:
+  files:
+
+networks:
+  internal: {}
+  caddy:
+    external: true
+    name: ${CADDY_NETWORK:-n8n_data_default}
